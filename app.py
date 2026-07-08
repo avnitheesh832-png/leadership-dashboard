@@ -7,6 +7,7 @@ from flask import (Flask, Response, redirect, render_template, request,
                    session, url_for)
 
 import data
+import store
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-sumwon-leadership")
@@ -95,7 +96,28 @@ def projects_page():
 @app.route("/meeting")
 def meeting():
     projects, meta = data.get_projects()
-    focus = [p for p in projects if p["meeting"]]
+    week = monday_of_week().isoformat()
+    sel = store.get_week(week)
+
+    by_key = {p["category"] + "||" + p["name"]: p for p in projects}
+    focus = []
+    for key, s in sel.items():
+        p = by_key.get(key)
+        if p:
+            q = dict(p)
+        else:  # project no longer in the tracker — keep the stored shell
+            q = {"category": s["category"], "name": s["name"], "sub": "",
+                 "owner": "", "priority": "", "status": "Not Started",
+                 "progress": 0, "deadline": "", "update": "", "update_label": "",
+                 "details": "", "doc": "", "rag": "a", "missing": True}
+        q["key"] = key
+        q["decision"] = s["decision"]
+        q["next_steps"] = s["next_steps"]
+        q["update_override"] = s["update_override"]
+        if s["update_override"]:
+            q["update"] = s["update_override"]
+            q["update_label"] = "EDITED"
+        focus.append(q)
 
     order, groups = [], {}
     for p in focus:
@@ -104,21 +126,64 @@ def meeting():
             groups[c] = []
             order.append(c)
         groups[c].append(p)
-
     sections = [{"name": c, "color": data.dept_color(c, i), "projects": groups[c]}
                 for i, c in enumerate(order)]
 
     risk = sum(1 for p in focus if p["status"] == "At Risk")
     not_started = sum(1 for p in focus if p["status"] == "Not Started")
+    decisions = sum(1 for p in focus if p["decision"])
     kpis = {"active": len(focus), "risk": risk, "not_started": not_started,
-            "on_track": len(focus) - risk - not_started}
+            "on_track": len(focus) - risk - not_started, "decisions": decisions}
+
+    available = []
+    for p in projects:
+        key = p["category"] + "||" + p["name"]
+        if key not in sel:
+            available.append({"key": key, "category": p["category"],
+                              "name": p["name"], "owner": p["owner"],
+                              "status": p["status"], "progress": p["progress"]})
 
     monday = monday_of_week()
     return render_template(
-        "meeting.html", sections=sections, kpis=kpis,
-        n_depts=len(sections), n_focus=len(focus),
+        "meeting.html", sections=sections, kpis=kpis, available=available,
+        n_depts=len(sections), n_focus=len(focus), week=week,
         meeting_date=monday.strftime("%A, %-d %B %Y"),
         meta=meta, sheet_url=SHEET_URL)
+
+
+# ------------------------------------------------------------- meeting APIs
+@app.route("/api/meeting/add", methods=["POST"])
+def api_meeting_add():
+    body = request.get_json(silent=True) or {}
+    items = body.get("items", [])
+    clean = [{"key": str(i.get("key", ""))[:300],
+              "category": str(i.get("category", ""))[:100],
+              "name": str(i.get("name", ""))[:200]}
+             for i in items if i.get("key")]
+    store.add_items(monday_of_week().isoformat(), clean)
+    return {"ok": True, "added": len(clean)}
+
+
+@app.route("/api/meeting/remove", methods=["POST"])
+def api_meeting_remove():
+    body = request.get_json(silent=True) or {}
+    ok = store.remove_item(monday_of_week().isoformat(), str(body.get("key", "")))
+    return {"ok": bool(ok)}
+
+
+@app.route("/api/meeting/save", methods=["POST"])
+def api_meeting_save():
+    body = request.get_json(silent=True) or {}
+    key = str(body.get("key", ""))
+    kwargs = {}
+    if "decision" in body:
+        kwargs["decision"] = bool(body["decision"])
+    if "next_steps" in body:
+        kwargs["next_steps"] = str(body["next_steps"])[:2000]
+    if "update_override" in body:
+        kwargs["update_override"] = str(body["update_override"])[:2000]
+    ok = store.save_fields(monday_of_week().isoformat(), key, **kwargs)
+    return {"ok": bool(ok)}
 
 
 @app.route("/export.csv")

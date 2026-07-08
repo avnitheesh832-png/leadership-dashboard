@@ -17,21 +17,31 @@ credentials are configured — so you can deploy and review immediately.
 
 ---
 
-## 1. The Google Sheet
+## 1. The Google Sheet — works with the existing tracker as-is
 
-Create a Google Sheet with these exact headers in row 1 (or import
-`demo_data.csv` via File → Import as a starting template):
+The app is built for the **"Projects Tracker - CEO - COO - CBO Office"** sheet
+structure and needs **no restructuring**:
 
-| Meeting | Category | Sub Category | Project Name | Owner | CEO Office Lead | Priority | Status | Progress | Deadline | Latest Update |
-|---------|----------|--------------|--------------|-------|-----------------|----------|--------|----------|----------|---------------|
-
-Column rules:
-- **Meeting** — `Y` includes the project in the Monday Meeting view, `N` (or blank) keeps it in the projects list only
-- **Priority** — High / Medium / Low (or blank)
-- **Status** — In Progress, Completed, At Risk, Not Started, Always On
-  (variants like "Blocked", "Done", "WIP", "Ongoing" are auto-mapped)
-- **Progress** — number 0–100 (Completed auto-shows 100)
-- **Deadline** — any of YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY
+- **Every tab = a department** (Merch, Marketing, AI, Finance, Legal, Quick Wins...).
+  Dashboard/utility tabs (names containing *dashboard, view, notes, old*) are
+  skipped automatically. Override with `INCLUDE_TABS` or `EXCLUDE_TABS`
+  (comma-separated tab names) if needed.
+- The **header row is auto-detected** (the row containing `Project Name`), so the
+  title and quick-glance counters above it are ignored.
+- Pre-numbered **empty rows are skipped**.
+- Recognised columns: `Subject`, `Project Name`, `Details & Comments`,
+  `Link to Document`, `Priority` ("High Priority" etc.), `Owner`, `Deadline`
+  (any common format, free text like "August" passes through), `Status`,
+  `% Done`, `Additional Comments`, and any number of dated `Update DD.MM`
+  columns — the **right-most non-empty update** is shown as Latest Update.
+- **Monday Meeting selection:** the meeting is curated inside the dashboard.
+  Click **+ ADD PROJECT** on the meeting page to pull any existing tracker
+  project into this week's agenda (search, add one by one, or "Add all
+  active"). Each card then has an editable **Latest Update**, a **Next
+  Steps** box, a **Decision Required** toggle, and a remove (×) button.
+  Everything auto-saves to a dedicated `DashboardMeetings` tab the app
+  creates in your sheet — one row per project per week, fully auditable,
+  and your tracker tabs are never modified.
 
 ## 2. Google Cloud service account (one-time, ~5 minutes)
 
@@ -43,7 +53,9 @@ Column rules:
    a JSON file downloads. Keep it private.
 5. Copy the service account's email (looks like
    `leadership-dashboard@project-id.iam.gserviceaccount.com`) and **share your
-   Google Sheet with that email as Viewer**.
+   Google Sheet with that email as EDITOR** (the dashboard writes meeting
+   selections and edits to its own 'DashboardMeetings' tab — it never touches
+   the tracker's department tabs).
 
 ## 3. Deploy on Railway
 
@@ -60,6 +72,7 @@ Column rules:
 | `DASHBOARD_PIN` | Access PIN (default `2026` — change it) |
 | `SECRET_KEY` | Any long random string (session security) |
 | `CACHE_TTL` | (optional) Seconds between sheet re-reads, default `60` |
+| `MEETING_TAB` | (optional) Name of the tab the app stores meeting data in, default `DashboardMeetings` |
 
 4. Railway detects the Procfile and deploys. Open the generated domain,
    enter the PIN, done.
@@ -76,6 +89,8 @@ python app.py            # demo mode on http://localhost:5000  (PIN 2026)
 
 ## Weekly workflow
 
-1. Team updates the Google Sheet during the week (status, progress, latest update)
-2. Flag `Meeting = Y` on the projects to discuss on Monday
-3. Open `/meeting` in the CEO session — Present for fullscreen, Export PDF to archive the week
+1. Team updates the tracker during the week (status, progress, updates)
+2. Before Monday: open `/meeting`, click **+ ADD PROJECT** and build the agenda;
+   type updates/next steps and tick Decision Required where needed
+3. In the CEO session — Present for fullscreen, Export PDF to archive the week
+4. Next Monday starts with a fresh empty agenda (each week is stored separately)

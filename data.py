@@ -1,8 +1,23 @@
-"""Data layer — reads projects from a Google Sheet (service account) with a
-short-lived cache, falling back to bundled demo data when credentials are absent."""
+"""Data layer — reads the Sumwon 'Projects Tracker - CEO - COO - CBO Office'
+Google Sheet (service account), one department per tab, with a short cache.
+Falls back to bundled demo data when credentials are absent.
+
+Sheet handling:
+- Every tab is treated as a department, except dashboard/utility tabs
+  (names containing 'dashboard', 'view', 'notes', 'old' — configurable via
+  INCLUDE_TABS / EXCLUDE_TABS env vars).
+- The header row is auto-detected (the row containing 'Project Name'),
+  so the title/KPI block at the top of each tab is ignored.
+- Rows without a Project Name are skipped (pre-numbered empty rows).
+- 'Latest update' = right-most non-empty 'Update DD.MM' column,
+  falling back to Additional Comments.
+- Meeting flag: if a 'Meeting' column exists (Y/N) it is used; otherwise
+  every non-Completed project is included in the Monday Meeting view.
+"""
 import csv
 import json
 import os
+import re
 import time
 from datetime import datetime
 
@@ -14,10 +29,11 @@ VALID_STATUSES = ["In Progress", "Completed", "At Risk", "Not Started", "Always 
 
 STATUS_CANON = {
     "in progress": "In Progress", "inprogress": "In Progress", "wip": "In Progress",
-    "on track": "In Progress", "ontrack": "In Progress",
-    "completed": "Completed", "complete": "Completed", "done": "Completed",
+    "on track": "In Progress", "ontrack": "In Progress", "active": "In Progress",
+    "completed": "Completed", "complete": "Completed", "done": "Completed", "closed": "Completed",
     "at risk": "At Risk", "atrisk": "At Risk", "blocked": "At Risk", "off track": "At Risk",
-    "not started": "Not Started", "notstarted": "Not Started", "to do": "Not Started", "todo": "Not Started",
+    "not started": "Not Started", "notstarted": "Not Started", "to do": "Not Started",
+    "todo": "Not Started", "on hold": "Not Started", "paused": "Not Started",
     "always on": "Always On", "alwayson": "Always On", "ongoing": "Always On", "bau": "Always On",
 }
 
@@ -30,20 +46,170 @@ DEPT_PALETTE = {
     "onsite + pricing": "#06B6D4",
     "others": "#7C3AED",
     "finance": "#F97316",
+    "commercial finance": "#FB7185",
     "new brand launches": "#6366F1",
     "new collaborations": "#A855F7",
+    "new channels": "#22C55E",
     "product": "#14B8A6",
     "wholesale": "#64748B",
     "studio": "#0EA5E9",
     "strategic projects": "#EF4444",
     "corporate & pr": "#84CC16",
+    "legal": "#78716C",
 }
 FALLBACK_COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EC4899",
                    "#06B6D4", "#7C3AED", "#F97316", "#14B8A6", "#EF4444"]
 
+# Tabs skipped by default (dashboards / views / scratch tabs inside the sheet)
+DEFAULT_EXCLUDE_PATTERN = re.compile(r"dashboard|view|notes|old", re.I)
+
+DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
+                "%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y")
+
+MEETING_YES = ("y", "yes", "true", "1", "\u2713")
+
 
 def dept_color(name, idx=0):
     return DEPT_PALETTE.get((name or "").strip().lower(), FALLBACK_COLORS[idx % len(FALLBACK_COLORS)])
+
+
+def _fmt_deadline(raw):
+    if not raw:
+        return ""
+    for f in DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, f).strftime("%-d %b %Y")
+        except ValueError:
+            continue
+    return raw  # free text like "August" passes through
+
+
+def _canon_status(raw):
+    if not raw:
+        return "Not Started"
+    s = STATUS_CANON.get(raw.strip().lower())
+    if s:
+        return s
+    t = raw.strip().title()
+    return t if t in VALID_STATUSES else "In Progress"
+
+
+def _canon_priority(raw):
+    p = re.sub(r"priority", "", raw or "", flags=re.I).strip().title()
+    return p if p in ("High", "Medium", "Low") else (p or "")
+
+
+def _pct(raw):
+    try:
+        v = int(float(str(raw).replace("%", "").strip() or 0))
+        return max(0, min(100, v))
+    except ValueError:
+        return 0
+
+
+def _make_project(category, name, sub, owner, priority, status, progress,
+                  deadline, update, update_label, details, doc, meeting):
+    status = _canon_status(status)
+    progress = 100 if status == "Completed" else _pct(progress)
+    rag = "r" if status == "At Risk" else ("a" if status == "Not Started" else "g")
+    return {
+        "meeting": meeting if meeting is not None else (status != "Completed"),
+        "category": category or "Uncategorised",
+        "sub": sub or "",
+        "name": name,
+        "owner": owner or "",
+        "ceo_lead": "",
+        "priority": _canon_priority(priority),
+        "status": status,
+        "progress": progress,
+        "deadline": _fmt_deadline(deadline or ""),
+        "update": update or "",
+        "update_label": update_label or "",
+        "details": details or "",
+        "doc": doc or "",
+        "rag": rag,
+    }
+
+
+# ------------------------------------------------------------------ sheet
+def _selected_tabs(all_titles):
+    include = [t.strip() for t in os.environ.get("INCLUDE_TABS", "").split(",") if t.strip()]
+    if include:
+        return [t for t in all_titles if t in include]
+    exclude = {t.strip().lower() for t in os.environ.get("EXCLUDE_TABS", "").split(",") if t.strip()}
+    out = []
+    for t in all_titles:
+        if t.lower() in exclude:
+            continue
+        if not exclude and DEFAULT_EXCLUDE_PATTERN.search(t):
+            continue
+        out.append(t)
+    return out
+
+
+def _parse_tab(title, rows):
+    """Parse one department tab: locate the header row, map columns, emit projects."""
+    hdr_idx, headers = None, []
+    for i, row in enumerate(rows[:40]):
+        low = [str(c).strip().lower() for c in row]
+        if "project name" in low:
+            hdr_idx, headers = i, low
+            break
+    if hdr_idx is None:
+        return []
+
+    def col(*names, prefix=False):
+        for n in names:
+            for j, h in enumerate(headers):
+                if (prefix and h.startswith(n)) or (not prefix and h == n):
+                    return j
+        return None
+
+    c_name = col("project name")
+    c_subj = col("subject", "sub category", "subcategory")
+    c_details = col("details & comments", "details", "description")
+    c_doc = col("link to document", "link", "document")
+    c_pri = col("priority")
+    c_owner = col("owner", "owners")
+    c_dl = col("deadline", "due date", "due")
+    c_status = col("status")
+    c_prog = col("% done", "progress", "% complete", "percent")
+    c_add = col("additional comments", "comments")
+    c_meet = col("meeting", "monday meeting", "y/n")
+    upd_cols = [(j, headers[j]) for j in range(len(headers)) if headers[j].startswith("update")]
+
+    out = []
+    for row in rows[hdr_idx + 1:]:
+        def get(j):
+            return str(row[j]).strip() if j is not None and j < len(row) else ""
+
+        name = get(c_name)
+        if not name:
+            continue
+
+        update, update_label = "", ""
+        for j, h in upd_cols:  # right-most non-empty dated update wins
+            v = get(j)
+            if v:
+                update = v
+                update_label = re.sub(r"^update", "", h, flags=re.I).strip(" .:—-")
+        if not update:
+            update = get(c_add)
+
+        meeting = None
+        if c_meet is not None:
+            meeting = get(c_meet).lower() in MEETING_YES
+
+        sub = get(c_subj)
+        if sub.lower() == title.strip().lower():
+            sub = ""
+
+        out.append(_make_project(
+            category=title.strip(), name=name, sub=sub, owner=get(c_owner),
+            priority=get(c_pri), status=get(c_status), progress=get(c_prog),
+            deadline=get(c_dl), update=update, update_label=update_label,
+            details=get(c_details), doc=get(c_doc), meeting=meeting))
+    return out
 
 
 def _from_sheet():
@@ -52,86 +218,47 @@ def _from_sheet():
 
     info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
     creds = Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    )
+        info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(os.environ["SHEET_ID"])
-    ws_name = os.environ.get("WORKSHEET_NAME", "").strip()
-    ws = sh.worksheet(ws_name) if ws_name else sh.sheet1
-    return ws.get_all_records()
+
+    titles = [ws.title for ws in sh.worksheets()]
+    tabs = _selected_tabs(titles)
+    if not tabs:
+        return []
+
+    ranges = ["'{}'!A1:Z500".format(t.replace("'", "''")) for t in tabs]
+    resp = sh.values_batch_get(ranges)
+    projects = []
+    for title, vr in zip(tabs, resp.get("valueRanges", [])):
+        projects.extend(_parse_tab(title, vr.get("values", [])))
+    return projects
 
 
+# ------------------------------------------------------------------ demo csv
 def _from_csv():
     path = os.path.join(os.path.dirname(__file__), "demo_data.csv")
+    out = []
     with open(path, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+        for r in csv.DictReader(f):
+            g = {k.strip().lower(): (v or "").strip() for k, v in r.items()}
+            if not g.get("project name"):
+                continue
+            out.append(_make_project(
+                category=g.get("category", ""), name=g["project name"],
+                sub=g.get("sub category", ""), owner=g.get("owner", ""),
+                priority=g.get("priority", ""), status=g.get("status", ""),
+                progress=g.get("progress", ""), deadline=g.get("deadline", ""),
+                update=g.get("latest update", ""), update_label="",
+                details="", doc="",
+                meeting=g.get("meeting", "").lower() in MEETING_YES))
+            out[-1]["ceo_lead"] = g.get("ceo office lead", "")
+    return out
 
 
-def _fmt_deadline(raw):
-    if not raw:
-        return ""
-    for f in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"):
-        try:
-            return datetime.strptime(raw, f).strftime("%-d %b %Y")
-        except ValueError:
-            continue
-    return raw
-
-
-def _norm(rec):
-    g = {str(k).strip().lower(): ("" if v is None else str(v).strip()) for k, v in rec.items()}
-
-    def pick(*names):
-        for n in names:
-            if g.get(n):
-                return g[n]
-        return ""
-
-    name = pick("project name", "project", "name", "title")
-    if not name:
-        return None
-
-    status_raw = pick("status")
-    status = STATUS_CANON.get(status_raw.lower(), status_raw.title() if status_raw else "Not Started")
-    if status not in VALID_STATUSES:
-        status = "In Progress"
-
-    try:
-        progress = int(float(pick("progress", "progress %", "%").replace("%", "") or 0))
-        progress = max(0, min(100, progress))
-    except ValueError:
-        progress = 0
-
-    if status == "Completed":
-        progress = 100
-
-    meeting = pick("meeting", "monday meeting", "in meeting", "y/n", "yn").lower() in (
-        "y", "yes", "true", "1", "\u2713")
-
-    rag = "r" if status == "At Risk" else ("a" if status == "Not Started" else "g")
-
-    return {
-        "meeting": meeting,
-        "category": pick("category", "department", "dept") or "Uncategorised",
-        "sub": pick("sub category", "subcategory", "sub-category", "sub"),
-        "name": name,
-        "owner": pick("owner", "owners"),
-        "ceo_lead": pick("ceo office lead", "ceo lead", "ceo office"),
-        "priority": pick("priority").title(),
-        "status": status,
-        "progress": progress,
-        "deadline": _fmt_deadline(pick("deadline", "due date", "due")),
-        "update": pick("latest update", "update", "notes", "latest"),
-        "rag": rag,
-    }
-
-
+# ------------------------------------------------------------------ cache
 def _meta():
-    return {
-        "source": _cache["source"],
-        "error": _cache["error"],
-        "synced": _cache["synced"],
-    }
+    return {"source": _cache["source"], "error": _cache["error"], "synced": _cache["synced"]}
 
 
 def get_projects(force=False):
@@ -144,14 +271,13 @@ def get_projects(force=False):
         try:
             rows = _from_sheet()
             source = "sheet"
-        except Exception as e:  # fall back to demo but surface the error
+        except Exception as e:
             err = f"{type(e).__name__}: {e}"
             rows = None
 
     if rows is None:
         rows = _from_csv()
 
-    projects = [p for p in (_norm(r) for r in rows) if p]
-    _cache.update(ts=now, rows=projects, source=source, error=err,
+    _cache.update(ts=now, rows=rows, source=source, error=err,
                   synced=datetime.now().strftime("%H:%M"))
-    return projects, _meta()
+    return rows, _meta()
