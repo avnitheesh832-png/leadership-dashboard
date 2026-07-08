@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Projects Dashboard — Sumwon Studios{% endblock %}
+{% block content %}
+
+<div class="watermark" aria-hidden="true"></div>
+
+<div class="topbar">
+  <div class="tb-left">
+    <a class="back" href="{{ url_for('home') }}">&larr; HOME</a>
+    <span class="divider"></span>
+    <img class="brand-coin" src="{{ url_for('static', filename='logo-coin.png') }}" alt="">
+    <span class="brand" style="letter-spacing:.14em">PROJECTS DASHBOARD</span>
+    <span class="crumb">&middot; SUMWON STUDIOS</span>
+  </div>
+  <div class="tb-right">
+    {% if sheet_url %}<a class="btn btn-mint" href="{{ sheet_url }}" target="_blank" rel="noopener">&#128279; SHEETS</a>{% endif %}
+    <a class="btn btn-ghost" href="{{ url_for('meeting') }}">&#9636; MEETING</a>
+    <a class="btn btn-ghost" href="{{ url_for('refresh', next='/projects') }}">&#10227; REFRESH</a>
+    <span class="src-badge {{ 'demo' if meta.source != 'sheet' }}">
+      <span class="dot"></span>{{ 'LIVE' if meta.source == 'sheet' else 'DEMO DATA' }} &middot; {{ meta.synced }}
+    </span>
+  </div>
+</div>
+
+<div class="proj-layout">
+  <aside class="sidebar">
+    <div class="side-label">DEPARTMENT</div>
+    <button class="side-item {{ 'active' if not active_dept }}" data-dept="">
+      <span>ALL</span><span class="cnt">({{ counts['Total'] }})</span>
+    </button>
+    {% for d in depts|sort(attribute='name') %}
+    <button class="side-item {{ 'active' if active_dept == d.name }}" data-dept="{{ d.name }}">
+      <span>{{ d.name }}</span><span class="cnt">({{ d.count }})</span>
+    </button>
+    {% endfor %}
+  </aside>
+
+  <main class="proj-main">
+    <div class="kpi-row">
+      <div class="kpi-card" style="--c:#94A3B8"><span class="top"></span><span class="lab">TOTAL</span><div class="val" id="k-total">{{ counts['Total'] }}</div></div>
+      <div class="kpi-card" style="--c:#3B82F6;--vc:#2563EB"><span class="top"></span><span class="lab">IN PROGRESS</span><div class="val" id="k-inprogress">{{ counts['In Progress'] }}</div></div>
+      <div class="kpi-card" style="--c:#10B981;--vc:#059669"><span class="top"></span><span class="lab">COMPLETED</span><div class="val" id="k-completed">{{ counts['Completed'] }}</div></div>
+      <div class="kpi-card" style="--c:#EF4444;--vc:#DC2626"><span class="top"></span><span class="lab">AT RISK</span><div class="val" id="k-atrisk">{{ counts['At Risk'] }}</div></div>
+      <div class="kpi-card" style="--c:#94A3B8;--vc:#475569"><span class="top"></span><span class="lab">NOT STARTED</span><div class="val" id="k-notstarted">{{ counts['Not Started'] }}</div></div>
+      <div class="kpi-card" style="--c:#8B5CF6;--vc:#7C3AED"><span class="top"></span><span class="lab">ALWAYS ON</span><div class="val" id="k-alwayson">{{ counts['Always On'] }}</div></div>
+    </div>
+
+    <div class="filter-row">
+      <label class="search-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="search" id="q" placeholder="Search projects...">
+      </label>
+      <select class="filter" id="f-status">
+        <option value="">All Statuses</option>
+        <option>In Progress</option><option>Completed</option><option>At Risk</option>
+        <option>Not Started</option><option>Always On</option>
+      </select>
+      <select class="filter" id="f-priority">
+        <option value="">All Priorities</option>
+        {% for pr in priorities %}<option>{{ pr }}</option>{% endfor %}
+      </select>
+      <select class="filter" id="f-owner">
+        <option value="">All Owners</option>
+        {% for o in owners %}<option>{{ o }}</option>{% endfor %}
+      </select>
+      <select class="filter" id="f-meeting">
+        <option value="">Meeting: All</option>
+        <option value="Y">Meeting: Y</option>
+        <option value="N">Meeting: N</option>
+      </select>
+      <span class="count-note"><span id="visible-count">{{ counts['Total'] }}</span> PROJECTS</span>
+      <a class="btn btn-ghost" href="{{ url_for('export_csv') }}">&#8681; EXCEL</a>
+    </div>
+
+    <div class="table-card">
+      <div class="table-scroll">
+        <table id="ptable">
+          <thead>
+            <tr>
+              <th>Y/N</th><th>Category</th><th>Project Name</th><th>Owner</th>
+              <th>CEO Office Lead</th><th>Priority</th><th>Status</th>
+              <th>Progress</th><th>Deadline</th><th>Latest Update</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in projects %}
+            <tr data-dept="{{ p.category }}" data-status="{{ p.status }}"
+                data-priority="{{ p.priority }}" data-owner="{{ p.owner }}"
+                data-meeting="{{ 'Y' if p.meeting else 'N' }}"
+                data-search="{{ (p.name ~ ' ' ~ p.sub ~ ' ' ~ p.owner ~ ' ' ~ p.category ~ ' ' ~ p.update)|lower }}">
+              <td><span class="yn {{ 'y' if p.meeting }}">{{ 'Y' if p.meeting else 'N' }}</span></td>
+              <td class="cat-cell">{{ p.category }}</td>
+              <td class="pname" {% if p.details %}title="{{ p.details }}"{% endif %}><b>{{ p.name }}</b>{% if p.sub %}<span>{{ p.sub }}</span>{% endif %}</td>
+              <td class="owner-cell">{{ p.owner or '' }}{% if not p.owner %}<span class="dash">&mdash;</span>{% endif %}</td>
+              <td class="lead-cell">{{ p.ceo_lead or '' }}{% if not p.ceo_lead %}<span class="dash">&mdash;</span>{% endif %}</td>
+              <td>{% if p.priority %}<span class="prio {{ p.priority|lower }}">{{ p.priority }}</span>{% else %}<span class="dash">&mdash;</span>{% endif %}</td>
+              <td><span class="status-pill {{ p.status|lower|replace(' ','-') }}">{{ p.status }}</span></td>
+              <td class="prog-cell"><div class="prog-wrap"><div class="prog-bar"><i style="width:{{ p.progress }}%"></i></div><span>{{ p.progress }}%</span></div></td>
+              <td class="deadline-cell">{{ p.deadline or '' }}{% if not p.deadline %}<span class="dash">&mdash;</span>{% endif %}</td>
+              <td class="update-cell">{{ p.update or '' }}{% if not p.update %}<span class="dash">&mdash;</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const rows = Array.from(document.querySelectorAll('#ptable tbody tr'));
+const state = { dept: {{ active_dept|tojson }}, q: '', status: '', priority: '', owner: '', meeting: '' };
+
+function apply(){
+  let visible = 0;
+  const c = {'In Progress':0,'Completed':0,'At Risk':0,'Not Started':0,'Always On':0};
+  rows.forEach(r => {
+    const show =
+      (!state.dept || r.dataset.dept === state.dept) &&
+      (!state.status || r.dataset.status === state.status) &&
+      (!state.priority || r.dataset.priority === state.priority) &&
+      (!state.owner || r.dataset.owner === state.owner) &&
+      (!state.meeting || r.dataset.meeting === state.meeting) &&
+      (!state.q || r.dataset.search.includes(state.q));
+    r.style.display = show ? '' : 'none';
+    if (show){ visible++; c[r.dataset.status] = (c[r.dataset.status]||0)+1; }
+  });
+  document.getElementById('visible-count').textContent = visible;
+  document.getElementById('k-total').textContent = visible;
+  document.getElementById('k-inprogress').textContent = c['In Progress'];
+  document.getElementById('k-completed').textContent = c['Completed'];
+  document.getElementById('k-atrisk').textContent = c['At Risk'];
+  document.getElementById('k-notstarted').textContent = c['Not Started'];
+  document.getElementById('k-alwayson').textContent = c['Always On'];
+}
+
+document.querySelectorAll('.side-item').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.side-item').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  state.dept = b.dataset.dept;
+  history.replaceState(null,'', state.dept ? '?dept='+encodeURIComponent(state.dept) : '/projects');
+  apply();
+}));
+document.getElementById('q').addEventListener('input', e => { state.q = e.target.value.toLowerCase().trim(); apply(); });
+document.getElementById('f-status').addEventListener('change', e => { state.status = e.target.value; apply(); });
+document.getElementById('f-priority').addEventListener('change', e => { state.priority = e.target.value; apply(); });
+document.getElementById('f-owner').addEventListener('change', e => { state.owner = e.target.value; apply(); });
+document.getElementById('f-meeting').addEventListener('change', e => { state.meeting = e.target.value; apply(); });
+if (state.dept) apply();
+</script>
+{% endblock %}
