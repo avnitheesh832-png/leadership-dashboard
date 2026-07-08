@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Monday Meeting — Sumwon Studios{% endblock %}
+{% block bodyclass %}meeting{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div class="tb-left">
+    <a class="back" href="{{ url_for('projects_page') }}">&larr; ALL PROJECTS</a>
+    <span class="divider"></span>
+    <span class="crumb">SUMWON STUDIOS</span>
+    <span class="brand" style="letter-spacing:.14em">MONDAY MEETING</span>
+  </div>
+  <div class="tb-right">
+    <span class="tb-date">{{ meeting_date }}</span>
+    <button class="btn btn-red no-print" onclick="emailSummary()">&#9993; EMAIL</button>
+    <button class="btn btn-dark no-print" onclick="window.print()">&#8681; EXPORT PDF</button>
+    {% if sheet_url %}<a class="btn btn-indigo-outline no-print" href="{{ sheet_url }}" target="_blank" rel="noopener">+ ADD IN SHEET</a>{% endif %}
+    <div class="toggle-group no-print" role="group" aria-label="View mode">
+      <button id="v-cards" class="on">&#9638; Cards</button>
+      <button id="v-list">&#9776; List</button>
+    </div>
+    <label class="switch no-print">CEO LEAD
+      <input type="checkbox" id="ceo-toggle"><span class="track"></span>
+    </label>
+    <button class="btn btn-indigo no-print" onclick="present()">&#9654; PRESENT</button>
+    <button class="btn btn-ghost no-print" id="dark-toggle">&#9789; DARK</button>
+  </div>
+</div>
+
+<div class="meeting-wrap">
+
+  <div class="mtg-hero">
+    <div class="rainbow"></div>
+    <div class="inner">
+      <div class="mtg-meta">
+        <span class="pill-brand">SUMWON STUDIOS</span>
+        <span class="d">&middot; {{ meeting_date }}</span>
+      </div>
+      <h1>WEEKLY PROJECTS <span class="l2">MANAGEMENT MEETING</span></h1>
+      <div class="underline"></div>
+      <div class="mtg-stats">
+        <div class="stat"><b>{{ n_focus }}</b><span>PROJECTS IN FOCUS</span></div>
+        <div class="stat"><b>{{ n_depts }}</b><span>DEPARTMENTS</span></div>
+      </div>
+      <div class="mtg-dept-pills">
+        {% for s in sections %}
+        <a class="dept-pill" href="#sec-{{ loop.index }}" style="--pc: {{ s.color }}">
+          <span class="dot"></span>{{ s.name }} <span class="n">({{ s.projects|length }})</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="mtg-kpis">
+    <div class="mtg-kpi">
+      <div class="lab">ACTIVE PROJECTS</div>
+      <div class="val">{{ kpis.active }}</div>
+      <div class="sub">In this meeting</div>
+    </div>
+    <div class="mtg-kpi risk">
+      <div class="lab">BLOCKED / AT RISK</div>
+      <div class="val">{{ kpis.risk }}</div>
+      <div class="sub">Require immediate action</div>
+    </div>
+    <div class="mtg-kpi waiting">
+      <div class="lab">NOT STARTED</div>
+      <div class="val">{{ kpis.not_started }}</div>
+      <div class="sub">Awaiting kickoff</div>
+    </div>
+    <div class="mtg-kpi good">
+      <div class="lab">ON TRACK</div>
+      <div class="val">{{ kpis.on_track }}</div>
+      <div class="sub">No blockers</div>
+    </div>
+  </div>
+
+  {% if not sections %}
+  <div class="empty-state">
+    <b>No projects flagged for this meeting yet</b>
+    Set the <span style="font-family:var(--font-mono)">Meeting</span> column to <b style="display:inline">Y</b> in the Google Sheet for each project to discuss, then refresh.
+  </div>
+  {% endif %}
+
+  {% for s in sections %}
+  <section class="mtg-section" id="sec-{{ loop.index }}" style="--sc: {{ s.color }}">
+    <div class="mtg-sec-head">
+      <h2>{{ s.name }}</h2>
+      <span class="cnt">{{ s.projects|length }} project{{ 's' if s.projects|length != 1 }}</span>
+      <span class="spacer"></span>
+    </div>
+    <div class="mtg-cards cards-container">
+      {% for p in s.projects %}
+      <article class="mtg-card" data-rag="{{ p.rag }}" data-ceo="{{ '1' if p.ceo_lead else '0' }}">
+        <div class="mc-top">
+          <span class="rag-badge {{ p.rag }}"><span class="dot"></span>
+            {%- if p.rag == 'g' %} ON TRACK{% elif p.rag == 'a' %} NOT STARTED{% else %} AT RISK{% endif -%}
+          </span>
+          <div class="mc-right">
+            <div class="rag-dots" aria-hidden="true">
+              <i class="r {{ 'on' if p.rag == 'r' }}"></i><i class="a {{ 'on' if p.rag == 'a' }}"></i><i class="g {{ 'on' if p.rag == 'g' }}"></i>
+            </div>
+            <span class="mc-status">{{ p.status }}</span>
+          </div>
+        </div>
+        <h3>{{ p.name }}</h3>
+        <div class="mc-meta">
+          <span class="who">&#128100; {{ p.owner or 'Unassigned' }}</span>
+          {% if p.deadline %}<span class="due">&#128337; {{ p.deadline }}</span>{% else %}<span class="due" style="opacity:.55">+ due date</span>{% endif %}
+          {% if p.priority %}<span class="prio {{ p.priority|lower }}">{{ p.priority }} Priority</span>{% endif %}
+          {% if p.ceo_lead %}<span class="lead-tag">CEO OFFICE &middot; {{ p.ceo_lead }}</span>{% endif %}
+        </div>
+        <div class="mc-prog">
+          <span class="pct">{{ p.progress }}%</span>
+          <div class="bar"><i style="width:{{ p.progress }}%"></i></div>
+        </div>
+        {% if p.update %}
+        <div class="mc-update">
+          <div class="lab">LATEST UPDATE</div>
+          <p>{{ p.update }}</p>
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <div class="home-foot" style="border:0;padding:30px 0 0">
+    <span>SUMWON STUDIOS &middot; INTERNAL &mdash; LEADERSHIP ONLY</span>
+    <span>{{ 'LIVE · GOOGLE SHEET' if meta.source == 'sheet' else 'DEMO DATA' }} &middot; SYNCED {{ meta.synced }}</span>
+  </div>
+
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+// Cards / List toggle
+const vCards = document.getElementById('v-cards'), vList = document.getElementById('v-list');
+function setView(list){
+  document.querySelectorAll('.cards-container').forEach(c => c.classList.toggle('list-view', list));
+  vCards.classList.toggle('on', !list); vList.classList.toggle('on', list);
+}
+vCards.addEventListener('click', () => setView(false));
+vList.addEventListener('click', () => setView(true));
+
+// CEO lead filter
+document.getElementById('ceo-toggle').addEventListener('change', e => {
+  const on = e.target.checked;
+  document.querySelectorAll('.mtg-card').forEach(c => c.classList.toggle('hide-ceo', on && c.dataset.ceo === '0'));
+  document.querySelectorAll('.mtg-section').forEach(s => {
+    const any = Array.from(s.querySelectorAll('.mtg-card')).some(c => !c.classList.contains('hide-ceo'));
+    s.style.display = any ? '' : 'none';
+  });
+});
+
+// Dark mode
+document.getElementById('dark-toggle').addEventListener('click', () => {
+  document.body.classList.toggle('dark');
+});
+
+// Present mode: fullscreen
+function present(){
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+  else document.exitFullscreen();
+}
+
+// Email summary via mailto
+function emailSummary(){
+  const lines = ['Monday Meeting — {{ meeting_date }}', ''];
+  document.querySelectorAll('.mtg-section').forEach(s => {
+    lines.push(s.querySelector('h2').textContent.toUpperCase());
+    s.querySelectorAll('.mtg-card').forEach(c => {
+      lines.push('- ' + c.querySelector('h3').textContent + ' (' + c.querySelector('.mc-status').textContent + ', ' + c.querySelector('.pct').textContent + ')');
+    });
+    lines.push('');
+  });
+  const body = encodeURIComponent(lines.join('\n').slice(0, 1800));
+  location.href = 'mailto:?subject=' + encodeURIComponent('Monday Meeting — {{ meeting_date }}') + '&body=' + body;
+}
+</script>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Sumwon Studios Leadership{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <form class="login-card" method="post">
+    <span class="brand mono">SUMWON STUDIOS</span>
+    <h1>LEADERSHIP</h1>
+    <div class="sub">PROJECT DASHBOARD</div>
+    <input type="password" name="pin" inputmode="numeric" autocomplete="off"
+           placeholder="••••" aria-label="Access PIN" autofocus>
+    <button class="btn btn-dark" type="submit">ENTER DASHBOARD &rarr;</button>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+  </form>
+</div>
+{% endblock %}
