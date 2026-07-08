@@ -11,6 +11,13 @@ import store
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-sumwon-leadership")
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 3600  # cache static assets 1h
+
+try:
+    from flask_compress import Compress
+    Compress(app)  # gzip/brotli responses (the projects table shrinks ~10x)
+except ImportError:
+    pass
 
 PIN = os.environ.get("DASHBOARD_PIN", "2026")
 SHEET_URL = os.environ.get("SHEET_URL", "")
@@ -108,14 +115,14 @@ def meeting():
         else:  # project no longer in the tracker — keep the stored shell
             q = {"category": s["category"], "name": s["name"], "sub": "",
                  "owner": "", "priority": "", "status": "Not Started",
-                 "progress": 0, "deadline": "", "update": "", "update_label": "",
-                 "details": "", "doc": "", "rag": "a", "missing": True}
+                 "progress": 0, "deadline": "", "latest_update": "", "update_label": "",
+                 "details": "", "doc": "", "rag": "a", "missing": True, "latest_update": ""}
         q["key"] = key
         q["decision"] = s["decision"]
         q["next_steps"] = s["next_steps"]
         q["update_override"] = s["update_override"]
         if s["update_override"]:
-            q["update"] = s["update_override"]
+            q["latest_update"] = s["update_override"]
             q["update_label"] = "EDITED"
         focus.append(q)
 
@@ -141,11 +148,14 @@ def meeting():
         if key not in sel:
             available.append({"key": key, "category": p["category"],
                               "name": p["name"], "owner": p["owner"],
-                              "status": p["status"], "progress": p["progress"]})
+                              "status": p["status"], "progress": p["progress"],
+                              "priority": p["priority"]})
 
     monday = monday_of_week()
+    dept_names = sorted({p["category"] for p in projects})
     return render_template(
         "meeting.html", sections=sections, kpis=kpis, available=available,
+        dept_names=dept_names,
         n_depts=len(sections), n_focus=len(focus), week=week,
         meeting_date=monday.strftime("%A, %-d %B %Y"),
         meta=meta, sheet_url=SHEET_URL)
@@ -169,6 +179,12 @@ def api_meeting_remove():
     body = request.get_json(silent=True) or {}
     ok = store.remove_item(monday_of_week().isoformat(), str(body.get("key", "")))
     return {"ok": bool(ok)}
+
+
+@app.route("/api/meeting/clear", methods=["POST"])
+def api_meeting_clear():
+    removed = store.clear_week(monday_of_week().isoformat())
+    return {"ok": True, "removed": removed}
 
 
 @app.route("/api/meeting/save", methods=["POST"])
@@ -197,7 +213,7 @@ def export_csv():
     for p in projects:
         w.writerow(["Y" if p["meeting"] else "N", p["category"], p["sub"],
                     p["name"], p["owner"], p["ceo_lead"], p["priority"],
-                    p["status"], p["progress"], p["deadline"], p["update"]])
+                    p["status"], p["progress"], p["deadline"], p["latest_update"]])
     return Response(buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition":
                              "attachment; filename=sumwon-projects.csv"})

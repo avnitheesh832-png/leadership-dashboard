@@ -32,20 +32,22 @@ def _bust():
 
 
 # ------------------------------------------------------------- sheet backend
-def _ws():
-    import gspread
-    from google.oauth2.service_account import Credentials
+_ws_handle = None
 
-    info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-    creds = Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(os.environ["SHEET_ID"])
+
+def _ws():
+    global _ws_handle
+    if _ws_handle is not None:
+        return _ws_handle
+    import gspread
+    import gclient
+    sh = gclient.spreadsheet()
     try:
         ws = sh.worksheet(TAB)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(TAB, rows=2000, cols=len(HEADER))
         ws.append_row(HEADER)
+    _ws_handle = ws
     return ws
 
 
@@ -166,3 +168,21 @@ def save_fields(week, key, decision=None, next_steps=None, update_override=None)
         item["update_override"] = update_override
     _json_save(d)
     return True
+
+
+def clear_week(week):
+    """Remove every entry for the given week."""
+    if _sheet_mode():
+        rows = _sheet_rows(force=True)
+        keep = [r for i, r in enumerate(rows) if i == 0 or (r + [""])[0] != week]
+        removed = len(rows) - len(keep)
+        if removed:
+            ws = _ws()
+            ws.clear()
+            ws.update(values=keep, range_name="A1")
+            _bust()
+        return removed
+    d = _json_load()
+    removed = len(d.pop(week, {}) or {})
+    _json_save(d)
+    return removed

@@ -18,6 +18,7 @@ import csv
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 
@@ -123,7 +124,7 @@ def _make_project(category, name, sub, owner, priority, status, progress,
         "status": status,
         "progress": progress,
         "deadline": _fmt_deadline(deadline or ""),
-        "update": update or "",
+        "latest_update": update or "",
         "update_label": update_label or "",
         "details": details or "",
         "doc": doc or "",
@@ -213,17 +214,9 @@ def _parse_tab(title, rows):
 
 
 def _from_sheet():
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-    creds = Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(os.environ["SHEET_ID"])
-
-    titles = [ws.title for ws in sh.worksheets()]
-    tabs = _selected_tabs(titles)
+    import gclient
+    sh = gclient.spreadsheet()
+    tabs = _selected_tabs(gclient.tab_titles())
     if not tabs:
         return []
 
@@ -261,11 +254,10 @@ def _meta():
     return {"source": _cache["source"], "error": _cache["error"], "synced": _cache["synced"]}
 
 
-def get_projects(force=False):
-    now = time.time()
-    if not force and _cache["rows"] is not None and now - _cache["ts"] < CACHE_TTL:
-        return _cache["rows"], _meta()
+_refresh_lock = threading.Lock()
 
+
+def _load():
     rows, err, source = None, None, "demo"
     if os.environ.get("GOOGLE_CREDENTIALS_JSON") and os.environ.get("SHEET_ID"):
         try:
@@ -274,10 +266,33 @@ def get_projects(force=False):
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             rows = None
-
     if rows is None:
         rows = _from_csv()
-
-    _cache.update(ts=now, rows=rows, source=source, error=err,
+    _cache.update(ts=time.time(), rows=rows, source=source, error=err,
                   synced=datetime.now().strftime("%H:%M"))
-    return rows, _meta()
+
+
+def _load_bg():
+    if _refresh_lock.acquire(blocking=False):
+        try:
+            _load()
+        except Exception:
+            pass
+        finally:
+            _refresh_lock.release()
+
+
+def get_projects(force=False):
+    """Stale-while-revalidate: pages always render instantly from cache;
+    a background thread refreshes from the sheet when the cache is stale.
+    force=True (the Refresh button) reloads synchronously."""
+    if _cache["rows"] is None or force:
+        with _refresh_lock:
+            if _cache["rows"] is None or force:
+                _load()
+        return _cache["rows"], _meta()
+
+    if time.time() - _cache["ts"] >= CACHE_TTL:
+        threading.Thread(target=_load_bg, daemon=True).start()
+
+    return _cache["rows"], _meta()
