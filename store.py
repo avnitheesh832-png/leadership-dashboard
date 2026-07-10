@@ -186,3 +186,51 @@ def clear_week(week):
     removed = len(d.pop(week, {}) or {})
     _json_save(d)
     return removed
+
+
+def list_weeks():
+    """Return {week: {count, cats, decisions}} across all stored weeks."""
+    weeks = {}
+
+    def tally(week, cat, dec):
+        w = weeks.setdefault(week, {"count": 0, "cats": [], "decisions": 0})
+        w["count"] += 1
+        if cat and cat not in w["cats"]:
+            w["cats"].append(cat)
+        if dec:
+            w["decisions"] += 1
+
+    if _sheet_mode():
+        for r in _sheet_rows()[1:]:
+            r = r + [""] * (len(HEADER) - len(r))
+            if not r[0] or not r[1]:
+                continue
+            tally(r[0], r[2], r[5].strip().upper() in ("Y", "YES", "TRUE", "1"))
+    else:
+        for wk, items in _json_load().items():
+            for v in items.values():
+                tally(wk, v.get("category", ""), v.get("decision"))
+    return weeks
+
+
+def duplicate_week(src, dst):
+    """Copy src week's agenda (incl. decisions/next steps/updates) into dst."""
+    src_items = get_week(src)
+    dst_items = get_week(dst)
+    new = {k: v for k, v in src_items.items() if k not in dst_items}
+    if not new:
+        return 0
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if _sheet_mode():
+        rows = [[dst, k, v["category"], v["name"], stamp,
+                 "Y" if v["decision"] else "", v["next_steps"], v["update_override"]]
+                for k, v in new.items()]
+        _ws().append_rows(rows, value_input_option="RAW")
+        _bust()
+    else:
+        d = _json_load()
+        wk = d.setdefault(dst, {})
+        for k, v in new.items():
+            wk[k] = dict(v)
+        _json_save(d)
+    return len(new)

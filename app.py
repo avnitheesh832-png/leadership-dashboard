@@ -1,7 +1,7 @@
 import io
 import csv
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from flask import (Flask, Response, redirect, render_template, request,
                    session, url_for)
@@ -79,6 +79,31 @@ def monday_of_week():
     return today - timedelta(days=today.weekday())
 
 
+def current_meeting_week():
+    """The meeting the team is working towards: today if it's Monday,
+    otherwise the coming Monday (past Mondays live in the archive)."""
+    today = date.today()
+    if today.weekday() == 0:
+        return today
+    return today + timedelta(days=7 - today.weekday())
+
+
+def parse_week(s):
+    """Parse YYYY-MM-DD and snap to that week's Monday; None if invalid."""
+    if not s:
+        return None
+    try:
+        d = datetime.strptime(str(s), "%Y-%m-%d").date()
+        return d - timedelta(days=d.weekday())
+    except ValueError:
+        return None
+
+
+def api_week(body):
+    wk = parse_week(body.get("week"))
+    return (wk or current_meeting_week()).isoformat()
+
+
 # ---------------------------------------------------------------- routes
 @app.route("/")
 def home():
@@ -103,7 +128,8 @@ def projects_page():
 @app.route("/meeting")
 def meeting():
     projects, meta = data.get_projects()
-    week = monday_of_week().isoformat()
+    wk = parse_week(request.args.get("week")) or current_meeting_week()
+    week = wk.isoformat()
     sel = store.get_week(week)
 
     by_key = {p["category"] + "||" + p["name"]: p for p in projects}
@@ -151,13 +177,12 @@ def meeting():
                               "status": p["status"], "progress": p["progress"],
                               "priority": p["priority"]})
 
-    monday = monday_of_week()
     dept_names = sorted({p["category"] for p in projects})
     return render_template(
         "meeting.html", sections=sections, kpis=kpis, available=available,
-        dept_names=dept_names,
+        dept_names=dept_names, is_past=(wk < current_meeting_week()),
         n_depts=len(sections), n_focus=len(focus), week=week,
-        meeting_date=monday.strftime("%A, %-d %B %Y"),
+        meeting_date=wk.strftime("%A, %-d %B %Y"),
         meta=meta, sheet_url=SHEET_URL)
 
 
@@ -170,20 +195,21 @@ def api_meeting_add():
               "category": str(i.get("category", ""))[:100],
               "name": str(i.get("name", ""))[:200]}
              for i in items if i.get("key")]
-    store.add_items(monday_of_week().isoformat(), clean)
+    store.add_items(api_week(body), clean)
     return {"ok": True, "added": len(clean)}
 
 
 @app.route("/api/meeting/remove", methods=["POST"])
 def api_meeting_remove():
     body = request.get_json(silent=True) or {}
-    ok = store.remove_item(monday_of_week().isoformat(), str(body.get("key", "")))
+    ok = store.remove_item(api_week(body), str(body.get("key", "")))
     return {"ok": bool(ok)}
 
 
 @app.route("/api/meeting/clear", methods=["POST"])
 def api_meeting_clear():
-    removed = store.clear_week(monday_of_week().isoformat())
+    body = request.get_json(silent=True) or {}
+    removed = store.clear_week(api_week(body))
     return {"ok": True, "removed": removed}
 
 
@@ -198,8 +224,45 @@ def api_meeting_save():
         kwargs["next_steps"] = str(body["next_steps"])[:2000]
     if "update_override" in body:
         kwargs["update_override"] = str(body["update_override"])[:2000]
-    ok = store.save_fields(monday_of_week().isoformat(), key, **kwargs)
+    ok = store.save_fields(api_week(body), key, **kwargs)
     return {"ok": bool(ok)}
+
+
+@app.route("/api/meeting/duplicate", methods=["POST"])
+def api_meeting_duplicate():
+    body = request.get_json(silent=True) or {}
+    src = parse_week(body.get("source"))
+    if not src:
+        return {"ok": False, "error": "invalid source week"}, 400
+    copied = store.duplicate_week(src.isoformat(),
+                                  current_meeting_week().isoformat())
+    return {"ok": True, "copied": copied}
+
+
+@app.route("/meetings")
+def meetings_page():
+    _, meta = data.get_projects()
+    weeks = store.list_weeks()
+    cur = current_meeting_week().isoformat()
+    weeks.setdefault(cur, {"count": 0, "cats": [], "decisions": 0})
+    items = []
+    for wk in sorted(weeks, reverse=True):
+        try:
+            d = datetime.strptime(wk, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        info = weeks[wk]
+        items.append({
+            "week": wk,
+            "label": d.strftime("WEEK OF %-d %B %Y").upper(),
+            "date": d.strftime("%A, %-d %B %Y"),
+            "count": info["count"], "decisions": info["decisions"],
+            "is_current": wk == cur,
+            "cats": [{"name": c, "color": data.dept_color(c)}
+                     for c in info["cats"][:8]],
+        })
+    return render_template("meetings.html", items=items, cur=cur, meta=meta,
+                           sheet_url=SHEET_URL)
 
 
 @app.route("/export.csv")
