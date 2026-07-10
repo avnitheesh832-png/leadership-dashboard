@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Monday Meetings — Sumwon Studios{% endblock %}
+{% block content %}
+
+<div class="watermark" aria-hidden="true"></div>
+
+<div class="topbar">
+  <div class="tb-left">
+    <a class="back" href="{{ url_for('home') }}">&larr; HOME</a>
+    <span class="divider"></span>
+    <img class="brand-coin" src="{{ url_for('static', filename='logo-coin.webp') }}" alt="">
+    <span class="brand" style="letter-spacing:.14em">MONDAY MEETINGS</span>
+  </div>
+  <div class="tb-right">
+    <span class="src-badge {{ 'demo' if meta.source != 'sheet' }}">
+      <span class="dot"></span>{{ 'LIVE' if meta.source == 'sheet' else 'DEMO DATA' }} &middot; {{ meta.synced }}
+    </span>
+    <a class="btn btn-dark" href="{{ url_for('meeting') }}">+ NEW MEETING</a>
+  </div>
+</div>
+
+<div class="meetings-wrap">
+  <div class="saved-label">{{ items|length }} SAVED MEETING{{ 'S' if items|length != 1 }}</div>
+
+  {% for m in items %}
+  <div class="week-group">
+    <div class="week-label"><span>{{ m.label }}</span><i></i></div>
+    <div class="meet-card {{ 'current' if m.is_current }}">
+      <div class="meet-info">
+        <div class="meet-title">
+          Monday Meeting
+          {% if m.is_current %}<span class="up-badge">UPCOMING</span>{% endif %}
+          {% if m.decisions %}<span class="dec-badge">&#9873; {{ m.decisions }} DECISION{{ 'S' if m.decisions != 1 }}</span>{% endif %}
+        </div>
+        <div class="meet-date">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          {{ m.date }} <span class="meet-count">&middot; {{ m.count }} project{{ 's' if m.count != 1 }}</span>
+        </div>
+        {% if m.cats %}
+        <div class="meet-tags">
+          {% for c in m.cats %}<span class="meet-tag" style="--tc: {{ c.color }}">{{ c.name }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="meet-actions">
+        <a class="icon-btn" href="{{ url_for('meeting', week=m.week) }}" title="View this meeting">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </a>
+        {% if not m.is_current and m.count %}
+        <button class="icon-btn" title="Copy this agenda into the upcoming meeting"
+                onclick="duplicateWeek('{{ m.week }}', {{ m.count }})">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+        {% endif %}
+        {% if m.count %}
+        <button class="icon-btn danger" title="Delete this meeting's agenda"
+                onclick="deleteWeek('{{ m.week }}', '{{ m.date }}')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="home-foot" style="border:0;padding:30px 0 0">
+    <span>SUMWON STUDIOS &middot; INTERNAL &mdash; LEADERSHIP ONLY</span>
+    <span>MEETING HISTORY IS STORED IN THE DASHBOARDMEETINGS TAB</span>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+async function api(path, payload){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  if (!r.ok) throw new Error('Request failed');
+  return r.json();
+}
+async function duplicateWeek(week, count){
+  if (!confirm('Copy this agenda (' + count + ' projects, incl. next steps & decisions) into the upcoming meeting?')) return;
+  try {
+    const res = await api('/api/meeting/duplicate', {source: week});
+    location.href = '/meeting';
+  } catch(e){ alert('Could not copy — try again.'); }
+}
+async function deleteWeek(week, label){
+  if (!confirm('Delete the agenda for ' + label + '? This removes its projects, edits and decisions permanently.')) return;
+  try { await api('/api/meeting/clear', {week}); location.reload(); }
+  catch(e){ alert('Could not delete — try again.'); }
+}
+</script>
+{% endblock %}
